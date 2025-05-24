@@ -1,10 +1,12 @@
 import os
 import cv2
 import numpy as np
-from flask import Flask, request, jsonify, render_template, send_file
+from flask import Flask, request, jsonify, render_template, send_file, send_from_directory
 from werkzeug.utils import secure_filename
 import tempfile
 import base64
+import depthai as dai
+import time
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -16,6 +18,89 @@ os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 # Fijos de preprocesado
 BLUR_KSIZE = (5,5)
 THRESH_METHOD = cv2.THRESH_BINARY + cv2.THRESH_OTSU
+
+# Variable global para la cámara
+camera = None
+
+def init_camera():
+    global camera
+    if camera is None:
+        try:
+            # Crear pipeline
+            pipeline = dai.Pipeline()
+            
+            # Definir fuente - cámara RGB
+            cam_rgb = pipeline.create(dai.node.ColorCamera)
+            cam_rgb.setPreviewSize(1280, 720)
+            cam_rgb.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+            cam_rgb.setInterleaved(False)
+            cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
+            
+            # Configurar la cámara para mejor calidad
+            cam_rgb.setFps(30)
+            cam_rgb.initialControl.setAutoExposureEnable()
+            cam_rgb.initialControl.setAutoWhiteBalanceMode(dai.CameraControl.AutoWhiteBalanceMode.AUTO)
+            
+            # Crear salida sin buffer
+            xout_rgb = pipeline.create(dai.node.XLinkOut)
+            xout_rgb.setStreamName("rgb")
+            xout_rgb.input.setBlocking(False)
+            xout_rgb.input.setQueueSize(1)  # Solo mantener 1 frame en la cola
+            cam_rgb.preview.link(xout_rgb.input)
+            
+            # Conectar al dispositivo
+            device = dai.Device(pipeline)
+            camera = device
+            return True
+        except Exception as e:
+            print(f"Error inicializando la cámara: {e}")
+            return False
+    return True
+
+def capture_photo():
+    if not init_camera():
+        return None, "Error al inicializar la cámara"
+    
+    try:
+        # Obtener el stream de la cámara sin buffer
+        q_rgb = camera.getOutputQueue("rgb", maxSize=1, blocking=False)
+        
+        # Limpiar cualquier frame antiguo en la cola
+        while q_rgb.has():
+            q_rgb.get()
+        
+        # Capturar un único frame nuevo
+        in_rgb = q_rgb.get()
+        frame = in_rgb.getCvFrame()
+        
+        # Verificar que el frame es válido
+        if frame is None or frame.size == 0:
+            return None, "Error: Frame no válido"
+            
+        # Limpiar imágenes antiguas
+        for old_file in os.listdir(app.config['UPLOAD_FOLDER']):
+            if old_file.startswith('capture_'):
+                try:
+                    os.remove(os.path.join(app.config['UPLOAD_FOLDER'], old_file))
+                except:
+                    pass
+        
+        # Guardar la imagen
+        timestamp = int(time.time())
+        filename = f"capture_{timestamp}.jpg"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        cv2.imwrite(filepath, frame)
+        
+        return filename, None
+    except Exception as e:
+        return None, f"Error capturando foto: {str(e)}"
+
+@app.route('/capture', methods=['POST'])
+def capture():
+    filename, error = capture_photo()
+    if error:
+        return jsonify({'error': error}), 500
+    return jsonify({'filename': filename})
 
 def ensure_odd(x):
     return x if x % 2 == 1 else max(1, x-1)
@@ -139,6 +224,10 @@ def process():
         'image': img_base64,
         'status': status
     })
+
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename, as_attachment=False)
 
 if __name__ == '__main__':
     app.run(debug=True) 

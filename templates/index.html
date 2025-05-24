@@ -123,27 +123,6 @@
         let ctx = null;
         let resultCtx = null;
 
-        // Inicialización
-        window.onload = function() {
-            const canvas = document.getElementById('imageCanvas');
-            const resultCanvas = document.getElementById('resultCanvas');
-            ctx = canvas.getContext('2d');
-            resultCtx = resultCanvas.getContext('2d');
-
-            // Event listeners para los sliders
-            document.getElementById('minDefArea').addEventListener('input', updateSliderValue);
-            document.getElementById('aspRatio').addEventListener('input', updateSliderValue);
-            document.getElementById('morphKsize').addEventListener('input', updateSliderValue);
-
-            // Event listeners para el canvas
-            canvas.addEventListener('mousedown', startROISelection);
-            canvas.addEventListener('mousemove', updateROISelection);
-            canvas.addEventListener('mouseup', endROISelection);
-
-            // Event listener para la carga de imágenes
-            document.getElementById('imageInput').addEventListener('change', handleImageUpload);
-        };
-
         function updateSliderValue(e) {
             const value = e.target.value;
             const valueDisplay = document.getElementById(e.target.id + 'Value');
@@ -180,15 +159,39 @@
         }
 
         function loadImage(file) {
+            console.log('Iniciando loadImage con archivo:', file.name);
+            
+            const canvas = document.getElementById('imageCanvas');
+            const resultCanvas = document.getElementById('resultCanvas');
+            
+            // Limpiar los canvas existentes
+            if (ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+            if (resultCtx) {
+                resultCtx.clearRect(0, 0, resultCanvas.width, resultCanvas.height);
+            }
+            
+            // Resetear variables de estado
+            console.log('Estado anterior:', { currentImage, roiStart, roiEnd, isSelectingROI });
+            currentImage = null;
+            roiStart = null;
+            roiEnd = null;
+            isSelectingROI = false;
+            
+            // Cargar la nueva imagen
             const reader = new FileReader();
             reader.onload = function(e) {
+                console.log('FileReader completado');
                 const img = new Image();
                 img.onload = function() {
+                    console.log('Imagen cargada:', img.width, 'x', img.height);
                     currentImage = img;
-                    const canvas = document.getElementById('imageCanvas');
                     canvas.width = img.width;
                     canvas.height = img.height;
                     ctx.drawImage(img, 0, 0);
+                    canvas.style.opacity = '1';
+                    console.log('Imagen dibujada en el canvas');
                 };
                 img.src = e.target.result;
             };
@@ -305,6 +308,115 @@
             statusBox.classList.add(status === 'OK' ? 'status-ok' : 'status-nok');
             statusText.textContent = status;
         }
+
+        function handleCapture() {
+            console.log('Iniciando handleCapture');
+            
+            // Limpiar todo el estado y los canvas ANTES de la captura
+            const canvas = document.getElementById('imageCanvas');
+            const resultCanvas = document.getElementById('resultCanvas');
+            
+            // Limpiar los canvas
+            if (ctx) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                console.log('Canvas principal limpiado');
+            }
+            if (resultCtx) {
+                resultCtx.clearRect(0, 0, resultCanvas.width, resultCanvas.height);
+                console.log('Canvas de resultado limpiado');
+            }
+            
+            // Resetear variables de estado
+            currentImage = null;
+            currentFilename = null;
+            roiStart = null;
+            roiEnd = null;
+            isSelectingROI = false;
+            
+            // Ocultar el estado anterior
+            const statusBox = document.getElementById('statusBox');
+            statusBox.classList.add('d-none');
+            statusBox.classList.remove('status-ok', 'status-nok');
+            
+            canvas.style.opacity = '0.5';
+            
+            fetch('/capture', {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                console.log('Respuesta de /capture:', data);
+                
+                if (data.error) {
+                    alert(data.error);
+                    canvas.style.opacity = '1';
+                    return;
+                }
+                
+                // Cargar la nueva imagen en el canvas
+                const img = new Image();
+                img.onload = function() {
+                    // Configurar el tamaño del canvas
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    // Dibujar la imagen
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Actualizar el estado
+                    currentImage = img;
+                    currentFilename = data.filename;
+                    
+                    // Restaurar la opacidad
+                    canvas.style.opacity = '1';
+                };
+                
+                // Cargar la imagen con timestamp para evitar caché
+                img.src = `/uploads/${data.filename}?t=${new Date().getTime()}`;
+            })
+            .catch(error => {
+                console.error('Error en la captura:', error);
+                alert('Error al capturar la foto.');
+                canvas.style.opacity = '1';
+            });
+        }
+
+        // Inicialización
+        window.onload = function() {
+            const canvas = document.getElementById('imageCanvas');
+            const resultCanvas = document.getElementById('resultCanvas');
+            ctx = canvas.getContext('2d');
+            resultCtx = resultCanvas.getContext('2d');
+
+            // Event listeners para los sliders
+            document.getElementById('minDefArea').addEventListener('input', updateSliderValue);
+            document.getElementById('aspRatio').addEventListener('input', updateSliderValue);
+            document.getElementById('morphKsize').addEventListener('input', updateSliderValue);
+
+            // Event listeners para el canvas
+            canvas.addEventListener('mousedown', startROISelection);
+            canvas.addEventListener('mousemove', updateROISelection);
+            canvas.addEventListener('mouseup', endROISelection);
+
+            // Event listener para la carga de imágenes
+            document.getElementById('imageInput').addEventListener('change', handleImageUpload);
+            
+            // Event listener para el botón de captura
+            document.getElementById('captureButton').addEventListener('click', handleCapture);
+
+            // Cargar imagen si hay un filename en la URL
+            const urlParams = new URLSearchParams(window.location.search);
+            const filename = urlParams.get('filename');
+            if (filename) {
+                fetch(`/uploads/${filename}`)
+                    .then(response => response.blob())
+                    .then(blob => {
+                        const file = new File([blob], filename, { type: 'image/jpeg' });
+                        currentFilename = filename;
+                        loadImage(file);
+                    });
+            }
+        };
     </script>
 </body>
 </html> 
